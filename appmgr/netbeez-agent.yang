@@ -76,5 +76,5 @@ module netbeez-agent {
     }
 
     // data definition statements
-    uses auto-config-agent-top;
+    uses netbeez-agent-top;
 }
