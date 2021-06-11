@@ -29,7 +29,7 @@ function main()
     docker load < /home/appmgr/netbeez_agent.tar.gz
 
     sudo docker volume create netbeez-config-vol1
-    sudo docker-compose -f netbeez-compose.yml up &
+    sudo docker-compose -f netbeez-compose-yml up &
 
     local virtual_env="/opt/srlinux/python/virtual-env/bin/activate"
     local main_module="/etc/opt/srlinux/appmgr/netbeez-agent.py"
