@@ -1,0 +1,80 @@
+module netbeez-agent {
+
+    yang-version "1";
+
+    // namespace
+    namespace "urn:srl_test/netbeez-agent";
+
+    prefix "netbeez-agent";
+
+    // import srl_nokia-common {
+    //    prefix srl_nokia-comm;
+    // }
+
+    // Note that this module needs to be in the path for source-directories
+    import srl_nokia-extensions {
+      prefix srl_nokia-ext;
+    }
+
+    revision "2021-06-11" {
+        description "Initial revision";
+        reference "TBD";
+    }
+
+    grouping netbeez-agent-top {
+        description "Top level grouping for auto config agent sample app";
+
+        container netbeez-agent {
+            presence "presence container";
+            description "Top level enclosing container for netbeez-agent sample app
+                         config and operational state data";
+
+            leaf state {
+                description "State for agent (stopped or running)";
+                type enumeration {
+                 enum stopped;
+                 enum running;
+                }
+                default running;
+            }
+
+            // Info from state
+            leaf some-counter {
+                type uint64;
+                config false;
+            }
+
+            // Sample list of peers
+            list peer {
+                key peer-ip;
+                config false;
+
+                leaf peer-ip {
+                  type string;
+                }
+                container bfd {
+                 srl_nokia-ext:delivery-node-override true;
+                 srl_nokia-ext:stream-mode sample=5;
+                 presence "State BFD operational parameters";
+
+                 leaf status {
+                  type string;
+                  default "red";
+                 }
+                 leaf flaps-last-period {
+                  type uint32;
+                 }
+                 leaf flaps-history {
+                  type string;
+                 }
+                 leaf last-flap-timestamp {
+                   type string;
+                 }
+                }
+            }
+        }
+    }
+
+    // data definition statements
+    uses auto-config-agent-top;
+}
