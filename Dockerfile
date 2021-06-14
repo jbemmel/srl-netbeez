@@ -9,7 +9,7 @@ RUN sudo yum install -y yum-utils && \
     sudo chmod +x /usr/local/bin/docker-compose
 
 # Preload the Netbeez Agent container
-COPY netbeez_agent.tar.gz /home/appmgr/
+COPY netbeez_agent.tar.gz /
 
 # Add a binary from another image
 # COPY --from=paris-traceroute /usr/local/bin/paris-* /usr/local/bin/

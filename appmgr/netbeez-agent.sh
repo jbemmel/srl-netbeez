@@ -26,7 +26,7 @@ function main()
     fi
 
     # Load container image
-    docker load < /home/appmgr/netbeez_agent.tar.gz
+    sudo docker load < /netbeez_agent.tar.gz
 
     sudo docker volume create netbeez-config-vol1
     sudo docker-compose -f netbeez-compose-yml up &
