@@ -6,6 +6,8 @@ topology:
       # Uses custom container image containing Netbeez agent
       image: srl/netbeez-agent:latest
       license: ../license.key
+      binds:
+      - docker:/var/lib/docker:rw
 
   nodes:
     leaf1:  { kind: srl, config: leaf1.cfg.json }
