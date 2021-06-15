@@ -17,20 +17,6 @@ function main()
 {
     trap _term SIGTERM
 
-    # Fix nameserver
-    sudo echo -e "nameserver 8.8.8.8\n" > /etc/resolv.conf
-
-    # Start Docker daemon if not running
-    if [[ ! -f /var/run/docker.pid ]]; then
-      sudo dockerd &
-    fi
-
-    # Load container image
-    sudo docker load < /netbeez_agent.tar.gz
-
-    sudo docker volume create netbeez-config-vol1
-    sudo docker-compose -f /etc/opt/srlinux/appmgr/netbeez-compose-yml up &
-
     local virtual_env="/opt/srlinux/python/virtual-env/bin/activate"
     local main_module="/etc/opt/srlinux/appmgr/netbeez-agent.py"
 

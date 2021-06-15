@@ -190,6 +190,7 @@ def Handle_Notification(obj, state):
                 if 'agent_key' in data:
                     state.agent_key = data['agent_key']
                     logging.info(f"Got agent key :: {state.agent_key}")
+                    script_restart_agent(state)
 
                 return not state.agent_key is None
 

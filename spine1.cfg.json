@@ -1,6 +1,6 @@
 {
   "netbeez_agent:netbeez-agent": {
-    "state": "running"
+    "agent-key": "c7bd60e4930a951f626195e8f2f07b7f24db1532"
   },
   "srl_nokia-acl:acl": {
     "cpm-filter": {
