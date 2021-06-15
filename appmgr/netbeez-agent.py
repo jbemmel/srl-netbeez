@@ -187,11 +187,11 @@ def Handle_Notification(obj, state):
             else:
                 json_acceptable_string = obj.config.data.json.replace("'", "\"")
                 data = json.loads(json_acceptable_string)
-                if 'state' in data:
-                    state.state = data['state']
-                    logging.info(f"Got state :: {state.state}")
+                if 'agent_key' in data:
+                    state.agent_key = data['agent_key']
+                    logging.info(f"Got agent key :: {state.agent_key}")
 
-                return not state.state is None
+                return not state.agent_key is None
 
     elif obj.HasField('lldp_neighbor'):
         # Update the config based on LLDP info, if needed
@@ -297,20 +297,20 @@ def get_app_id(app_name):
 ###########################
 # Invokes gnmic client to update router configuration, via bash script
 ###########################
-def script_update_config(some_param):
-    logging.info(f'Calling update script: some_param={some_param}' )
+def script_restart_agent(state):
+    logging.info(f'Calling restart script: state={state}' )
     try:
-       script_proc = subprocess.Popen(['/etc/opt/srlinux/appmgr/script-to-be-built.sh',
-                                       some_param ],
+       script_proc = subprocess.Popen(['/etc/opt/srlinux/appmgr/netbeez-restart-agent.sh',
+                                       state.agent_key ],
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
        stdoutput, stderroutput = script_proc.communicate()
-       logging.info(f'script_update_config result: {stdoutput} err={stderroutput}')
+       logging.info(f'script_restart_agent result: {stdoutput} err={stderroutput}')
     except Exception as e:
-       logging.error(f'Exception caught in script_update_config :: {e}')
+       logging.error(f'Exception caught in script_restart_agent :: {e}')
 
 class State(object):
     def __init__(self):
-        self.state = None       # running or stopped
+        self.agent_key = None       # Agent key received from NetBeez
 
         # TODO more properties
 

@@ -29,19 +29,26 @@ module netbeez-agent {
             description "Top level enclosing container for netbeez-agent sample app
                          config and operational state data";
 
-            leaf state {
-                description "State for agent (stopped or running)";
-                type enumeration {
-                 enum stopped;
-                 enum running;
-                }
-                default running;
+            leaf agent-key {
+                description "NB_SECRET_KEY for agent to register with NetBeez";
+                type string;
             }
 
             // Info from state
-            leaf some-counter {
+            leaf agent-id {
+                description "Agent ID assigned by NetBeez server";
+                type string;
+                config false;
+            }
+            leaf tests-executed {
                 type uint64;
                 config false;
+                default 0;
+            }
+            leaf tests-passed {
+                type uint64;
+                config false;
+                default 0;
             }
 
             // Sample list of peers

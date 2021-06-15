@@ -1,6 +1,7 @@
 # See example_config.yml for an explanation of all the accepted fields
 netbeez-agent:
    path: /etc/opt/srlinux/appmgr/
+   # Tried running this in srbase-mgmt, but dockerd won't start there
    launch-command: /etc/opt/srlinux/appmgr/netbeez-agent.sh
    search-command: python3 /etc/opt/srlinux/appmgr/netbeez-agent.py
    wait-for-config: Yes
