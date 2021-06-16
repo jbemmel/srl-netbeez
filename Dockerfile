@@ -11,8 +11,8 @@ RUN sudo yum install -y yum-utils && \
 # Preload the Netbeez Agent container
 COPY netbeez_agent.tar.gz /
 
-# Configure DNS for all containers
-COPY etc_docker_daemon.json /etc/docker/daemon.json
+# Configure DNS for all containers -> breaks config save
+# COPY etc_docker_daemon.json /etc/docker/daemon.json
 
 # Add a binary from another image
 # COPY --from=paris-traceroute /usr/local/bin/paris-* /usr/local/bin/

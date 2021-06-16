@@ -34,7 +34,7 @@ from logging.handlers import RotatingFileHandler
 ############################################################
 ## Agent will start with this name
 ############################################################
-agent_name='netbeez-agent'
+agent_name='netbeez_agent'
 
 ############################################################
 ## Open a GRPC channel to connect to sdk_mgr on the dut
@@ -93,10 +93,10 @@ def Subscribe_Notifications(stream_id):
     # Subscribe to config changes, first
     Subscribe(stream_id, 'cfg')
 
-    Subscribe(stream_id, 'bfd')  # BFD notifications
+    # Subscribe(stream_id, 'bfd')  # BFD notifications
 
     # To map route notifications to BGP peers
-    Subscribe(stream_id, 'nexthop_group')
+    # Subscribe(stream_id, 'nexthop_group')
 
 ############################################################
 ## Function to populate state of agent config
@@ -149,8 +149,8 @@ def Handle_Notification(obj, state):
         elif nh_ip != "?":
            state.owner_id_map[owner_id] = nh_ip # Remember for Delete
         logging.info( f"ROUTE notification: {_op}{addr}/{prefix} nhg={nhg_id} ip={nh_ip} owner_id={owner_id}" )
-        if nh_ip != "?":
-           Update_RouteFlapcounts(state, nh_ip, f'{_op}{addr}/{prefix}' )
+        #if nh_ip != "?":
+        #   Update_RouteFlapcounts(state, nh_ip, f'{_op}{addr}/{prefix}' )
 
     elif obj.HasField('nhg'):
         try:
@@ -159,14 +159,14 @@ def Handle_Notification(obj, state):
              logging.info( f"NEXTHOP Delete notification: nhg={nhg_id}" )
              if nhg_id in state.nhg_map:
                peer_ip = state.nhg_map[ nhg_id ]
-               Update_RouteFlapcounts(state, peer_ip, f'-nhg{nhg_id}')
+               # Update_RouteFlapcounts(state, peer_ip, f'-nhg{nhg_id}')
                delattr( state.nhg_map, nhg_id )
            else:
              for nh in obj.nhg.data.next_hop:
               if nh.ip_nexthop.addr != "":
                addr = ipaddress.ip_address(nh.ip_nexthop.addr).__str__()
                logging.info( f"NEXTHOP notification: {addr} nhg={nhg_id}" )
-               Update_RouteFlapcounts(state, addr, f'+nhg{nhg_id}')
+               # Update_RouteFlapcounts(state, addr, f'+nhg{nhg_id}')
                state.nhg_map[nhg_id] = addr
                break
         except Exception as e: # ip_nexthop not set
@@ -188,7 +188,7 @@ def Handle_Notification(obj, state):
                 json_acceptable_string = obj.config.data.json.replace("'", "\"")
                 data = json.loads(json_acceptable_string)
                 if 'agent_key' in data:
-                    state.agent_key = data['agent_key']
+                    state.agent_key = data['agent_key']['value']
                     logging.info(f"Got agent key :: {state.agent_key}")
                     script_restart_agent(state)
 
@@ -360,7 +360,7 @@ def Run():
                 else:
                     if Handle_Notification(obj, state) and not lldp_subscribed:
                        Subscribe(stream_id, 'lldp')
-                       Subscribe(stream_id, 'route')
+                       # Subscribe(stream_id, 'route')
                        lldp_subscribed = True
 
                     # Program router_id only when changed

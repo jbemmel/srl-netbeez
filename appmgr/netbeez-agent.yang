@@ -5,7 +5,7 @@ module netbeez-agent {
     // namespace
     namespace "urn:srl_test/netbeez-agent";
 
-    prefix "netbeez-agent";
+    prefix "netbeez_agent";
 
     // import srl_nokia-common {
     //    prefix srl_nokia-comm;
