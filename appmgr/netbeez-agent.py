@@ -40,8 +40,8 @@ agent_name='netbeez_agent'
 ## Open a GRPC channel to connect to sdk_mgr on the dut
 ## sdk_mgr will be listening on 50053
 ############################################################
-#channel = grpc.insecure_channel('unix:///opt/srlinux/var/run/sr_sdk_service_manager:50053')
-channel = grpc.insecure_channel('127.0.0.1:50053')
+channel = grpc.insecure_channel('unix:///opt/srlinux/var/run/sr_sdk_service_manager:50053')
+#channel = grpc.insecure_channel('127.0.0.1:50053')
 metadata = [('agent_name', agent_name)]
 stub = sdk_service_pb2_grpc.SdkMgrServiceStub(channel)
 
@@ -77,7 +77,7 @@ def Subscribe(stream_id, option):
         request = sdk_service_pb2.NotificationRegisterRequest(op=op, stream_id=stream_id, nhg=entry)
 
     subscription_response = stub.NotificationRegister(request=request, metadata=metadata)
-    print('Status of subscription response for {}:: {}'.format(option, subscription_response.status))
+    print(f'Status of subscription response for {option} :: {subscription_response.status}')
 
 ############################################################
 ## Subscribe to all the events that Agent needs
@@ -334,6 +334,7 @@ def Run():
     app_id = get_app_id(agent_name)
     if not app_id:
         logging.error(f'idb does not have the appId for {agent_name} : {app_id}')
+        sys.exit(-1)
     else:
         logging.info(f'Got appId {app_id} for {agent_name}')
 
@@ -350,6 +351,7 @@ def Run():
     state = State()
     count = 1
     lldp_subscribed = False
+    logging.info("Main loop - waiting for config notifications")
     try:
         for r in stream_response:
             logging.info(f"Count :: {count}  NOTIFICATION:: \n{r.notification}")
@@ -410,11 +412,11 @@ if __name__ == '__main__':
     if not os.path.exists(stdout_dir):
         os.makedirs(stdout_dir, exist_ok=True)
     log_filename = '{}/netbeez-agent.log'.format(stdout_dir)
-    logging.basicConfig(filename=log_filename, filemode='a',\
-                        format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',\
-                        datefmt='%H:%M:%S', level=logging.INFO)
-    handler = RotatingFileHandler(log_filename, maxBytes=3000000,backupCount=5)
-    logging.getLogger().addHandler(handler)
+    logging.basicConfig(
+      handlers=[RotatingFileHandler(log_filename, maxBytes=3000000,backupCount=5)],
+      format='%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s',
+      datefmt='%H:%M:%S', level=logging.INFO)
+
     logging.info("START TIME :: {}".format(datetime.datetime.now()))
     if Run():
         logging.info('Agent unregistered and agent routes withdrawed from dut')

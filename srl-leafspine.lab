@@ -10,9 +10,9 @@ topology:
       - docker:/var/lib/docker:rw
 
   nodes:
-    leaf1:  { kind: srl, config: leaf1.cfg.json }
-    leaf2:  { kind: srl, config: leaf2.cfg.json }
-    spine1: { kind: srl, config: spine1.cfg.json }
+    leaf1:  { kind: srl, startup-config: leaf1.cfg.json }
+    leaf2:  { kind: srl, startup-config: leaf2.cfg.json }
+    spine1: { kind: srl, startup-config: spine1.cfg.json }
 
     h1:
       kind: linux
