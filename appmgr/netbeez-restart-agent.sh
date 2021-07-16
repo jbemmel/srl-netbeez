@@ -29,6 +29,7 @@ services:
     container_name: nb-agent
     environment:
       - "INTERFACES=mgmt0.0"
+      # - "INTERFACES=gateway"
       - "AGENT_UUID=7025285876ba48abb2be49ab0f8b9bbe"
       - "NB_SECRET_KEY=${AGENT_KEY}"
     volumes:
@@ -50,10 +51,10 @@ function main()
     # Load container image
     sudo docker load < /netbeez_agent.tar.gz
 
-    sudo docker volume create netbeez-config-vol1
+    sudo docker volume create netbeez-config-vol
 
     write_compose
-    sudo docker-compose -f $temp_file up &
+    sudo /usr/local/bin/docker-compose -f $temp_file up &
 }
 
 main "$@"

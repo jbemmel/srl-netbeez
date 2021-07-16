@@ -1,0 +1,12 @@
+name: netbeez-lab
+
+topology:
+  kinds:
+    srl:
+      image: srl/netbeez:latest
+      license: ../license.key
+      binds:
+      - docker:/var/lib/docker:rw
+
+  nodes:
+    spine1: { kind: srl, startup-config: spine1.cfg }

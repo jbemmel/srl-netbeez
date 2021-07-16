@@ -22,7 +22,7 @@ module netbeez-agent {
     }
 
     grouping netbeez-agent-top {
-        description "Top level grouping for auto config agent sample app";
+        description "Top level grouping for Netbeez agent sample app";
 
         container netbeez-agent {
             presence "presence container";
@@ -32,52 +32,6 @@ module netbeez-agent {
             leaf agent-key {
                 description "NB_SECRET_KEY for agent to register with NetBeez";
                 type string;
-            }
-
-            // Info from state
-            leaf agent-id {
-                description "Agent ID assigned by NetBeez server";
-                type string;
-                config false;
-            }
-            leaf tests-executed {
-                type uint64;
-                config false;
-                default 0;
-            }
-            leaf tests-passed {
-                type uint64;
-                config false;
-                default 0;
-            }
-
-            // Sample list of peers
-            list peer {
-                key peer-ip;
-                config false;
-
-                leaf peer-ip {
-                  type string;
-                }
-                container bfd {
-                 srl_nokia-ext:delivery-node-override true;
-                 srl_nokia-ext:stream-mode sample=5;
-                 presence "State BFD operational parameters";
-
-                 leaf status {
-                  type string;
-                  default "red";
-                 }
-                 leaf flaps-last-period {
-                  type uint32;
-                 }
-                 leaf flaps-history {
-                  type string;
-                 }
-                 leaf last-flap-timestamp {
-                   type string;
-                 }
-                }
             }
         }
     }

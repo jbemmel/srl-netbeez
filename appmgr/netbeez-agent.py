@@ -7,27 +7,20 @@ import sys
 import logging
 import socket
 import os
-import re
-import ipaddress
+from ipaddress import ip_network, ip_address, IPv4Address
 import json
 import signal
 import traceback
+import re
+# import threading
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 
 import sdk_service_pb2
 import sdk_service_pb2_grpc
-import lldp_service_pb2
 import config_service_pb2
-import route_service_pb2
-import nexthop_group_service_pb2
-import sdk_common_pb2
 
-# To report state back
-import telemetry_service_pb2
-import telemetry_service_pb2_grpc
-
-# See opt/rh/rh-python36/root/usr/lib/python3.6/site-packages/sdk_protos/bfd_service_pb2.py
-import bfd_service_pb2
+from pygnmi.client import gNMIclient, telemetryParser
 
 from logging.handlers import RotatingFileHandler
 
@@ -41,14 +34,9 @@ agent_name='netbeez_agent'
 ## sdk_mgr will be listening on 50053
 ############################################################
 channel = grpc.insecure_channel('unix:///opt/srlinux/var/run/sr_sdk_service_manager:50053')
-#channel = grpc.insecure_channel('127.0.0.1:50053')
+# channel = grpc.insecure_channel('127.0.0.1:50053')
 metadata = [('agent_name', agent_name)]
 stub = sdk_service_pb2_grpc.SdkMgrServiceStub(channel)
-
-def SendKeepAlive():
-    request = sdk_service_pb2.KeepAliveRequest()
-    result = stub.KeepAlive(request=request, metadata=metadata)
-    print( f'Status of KeepAlive response :: {result.status}' )
 
 ############################################################
 ## Subscribe to required event
@@ -57,27 +45,13 @@ def SendKeepAlive():
 ############################################################
 def Subscribe(stream_id, option):
     op = sdk_service_pb2.NotificationRegisterRequest.AddSubscription
-    if option == 'lldp':
-        entry = lldp_service_pb2.LldpNeighborSubscriptionRequest()
-        # TODO filter out 'mgmt0' interfaces
-        request = sdk_service_pb2.NotificationRegisterRequest(op=op, stream_id=stream_id, lldp_neighbor=entry)
-    elif option == 'cfg':
+    if option == 'cfg':
         entry = config_service_pb2.ConfigSubscriptionRequest()
-        entry.key.js_path = '.' + agent_name
+        entry.key.js_path = '.' + agent_name # filter out .commit notifications
         request = sdk_service_pb2.NotificationRegisterRequest(op=op, stream_id=stream_id, config=entry)
-    elif option == 'bfd':
-        entry = bfd_service_pb2.BfdSessionSubscriptionRequest()
-        request = sdk_service_pb2.NotificationRegisterRequest(op=op, stream_id=stream_id, bfd_session=entry)
-    elif option == 'route':
-        # This includes all network namespaces, i.e. including mgmt
-        entry = route_service_pb2.IpRouteSubscriptionRequest()
-        request = sdk_service_pb2.NotificationRegisterRequest(op=op, stream_id=stream_id, route=entry)
-    elif option == 'nexthop_group':
-        entry = nexthop_group_service_pb2.NextHopGroupSubscriptionRequest()
-        request = sdk_service_pb2.NotificationRegisterRequest(op=op, stream_id=stream_id, nhg=entry)
 
     subscription_response = stub.NotificationRegister(request=request, metadata=metadata)
-    print(f'Status of subscription response for {option} :: {subscription_response.status}')
+    print('Status of subscription response for {}:: {}'.format(option, subscription_response.status))
 
 ############################################################
 ## Subscribe to all the events that Agent needs
@@ -93,197 +67,37 @@ def Subscribe_Notifications(stream_id):
     # Subscribe to config changes, first
     Subscribe(stream_id, 'cfg')
 
-    # Subscribe(stream_id, 'bfd')  # BFD notifications
-
-    # To map route notifications to BGP peers
-    # Subscribe(stream_id, 'nexthop_group')
-
-############################################################
-## Function to populate state of agent config
-## using telemetry -- add/update info from state
-############################################################
-def Add_Telemetry(js_path, js_data):
-    telemetry_stub = telemetry_service_pb2_grpc.SdkMgrTelemetryServiceStub(channel)
-    telemetry_update_request = telemetry_service_pb2.TelemetryUpdateRequest()
-    telemetry_info = telemetry_update_request.state.add()
-    telemetry_info.key.js_path = js_path
-    telemetry_info.data.json_content = js_data
-    logging.info(f"Telemetry_Update_Request :: {telemetry_update_request}")
-    telemetry_response = telemetry_stub.TelemetryAddOrUpdate(request=telemetry_update_request, metadata=metadata)
-    return telemetry_response
-
-############################################################
-## Function to populate state fields of the agent
-## It updates command: info from state auto-config-agent
-############################################################
-def Update_Peer_State(peer_ip, section, update_data):
-    _ip_key = '.'.join([i.zfill(3) for i in peer_ip.split('.')]) # sortable
-    js_path = '.' + agent_name + '.peer{.peer_ip=="' + _ip_key + '"}.'+section
-    response = Add_Telemetry( js_path=js_path, js_data=json.dumps(update_data) )
-    logging.info(f"Telemetry_Update_Response :: {response}")
-
-def Update_Global_State(state, var, val):
-    js_path = '.' + agent_name + '.' + var
-    response = Add_Telemetry( js_path=js_path, js_data=json.dumps(val) )
-    logging.info(f"Telemetry_Update_Response :: {response}")
-
 ##################################################################
 ## Proc to process the config Notifications received by auto_config_agent
-## At present processing config from js_path containing agent_name
+## At present processing config from js_path = .fib-agent
 ##################################################################
-def Handle_Notification(obj, state):
-    if obj.HasField('route'):
-        addr = ipaddress.ip_address(obj.route.key.ip_prefix.ip_addr.addr).__str__()
-        prefix = obj.route.key.ip_prefix.prefix_length
-        nhg_id = obj.route.data.nhg_id
-        owner_id = obj.route.data.owner_id # To correlate Delete later on
-        nh_ip = "?"
-        if nhg_id in state.nhg_map:
-           nh_ip = state.nhg_map[nhg_id]
-        _op = ""
-        if obj.route.op == "Delete":
-           _op = "-"
-           if owner_id in state.owner_id_map:
-             nh_ip = state.owner_id_map[ owner_id ]
-             delattr( state.owner_id_map, owner_id )
-        elif nh_ip != "?":
-           state.owner_id_map[owner_id] = nh_ip # Remember for Delete
-        logging.info( f"ROUTE notification: {_op}{addr}/{prefix} nhg={nhg_id} ip={nh_ip} owner_id={owner_id}" )
-        #if nh_ip != "?":
-        #   Update_RouteFlapcounts(state, nh_ip, f'{_op}{addr}/{prefix}' )
-
-    elif obj.HasField('nhg'):
-        try:
-           nhg_id = obj.nhg.key
-           if (obj.nhg.op == "Delete"):
-             logging.info( f"NEXTHOP Delete notification: nhg={nhg_id}" )
-             if nhg_id in state.nhg_map:
-               peer_ip = state.nhg_map[ nhg_id ]
-               # Update_RouteFlapcounts(state, peer_ip, f'-nhg{nhg_id}')
-               delattr( state.nhg_map, nhg_id )
-           else:
-             for nh in obj.nhg.data.next_hop:
-              if nh.ip_nexthop.addr != "":
-               addr = ipaddress.ip_address(nh.ip_nexthop.addr).__str__()
-               logging.info( f"NEXTHOP notification: {addr} nhg={nhg_id}" )
-               # Update_RouteFlapcounts(state, addr, f'+nhg{nhg_id}')
-               state.nhg_map[nhg_id] = addr
-               break
-        except Exception as e: # ip_nexthop not set
-           logging.error(f'Exception caught while processing nhg :: {e}')
-
-    elif obj.HasField('config') and obj.config.key.js_path != ".commit.end":
+def Handle_Notification(obj):
+    if obj.HasField('config'):
         logging.info(f"GOT CONFIG :: {obj.config.key.js_path}")
-        if agent_name in obj.config.key.js_path:
+        if "netbeez_agent" in obj.config.key.js_path:
             logging.info(f"Got config for agent, now will handle it :: \n{obj.config}\
                             Operation :: {obj.config.op}\nData :: {obj.config.data.json}")
             if obj.config.op == 2:
-                logging.info(f"Delete auto-config-agent cli scenario")
+                logging.info(f"Delete netbeez-agent cli scenario")
                 # if file_name != None:
                 #    Update_Result(file_name, action='delete')
                 response=stub.AgentUnRegister(request=sdk_service_pb2.AgentRegistrationRequest(), metadata=metadata)
-                logging.info( f'Handle_Config: Unregister response:: {response}' )
-                state = State() # Reset state, works?
+                logging.info('Handle_Config: Unregister response:: {}'.format(response))
             else:
                 json_acceptable_string = obj.config.data.json.replace("'", "\"")
                 data = json.loads(json_acceptable_string)
                 if 'agent_key' in data:
-                    state.agent_key = data['agent_key']['value']
-                    logging.info(f"Got agent key :: {state.agent_key}")
-                    script_restart_agent(state)
+                    agent_key = data['agent_key']['value']
+                    logging.info(f"Got agent key :: {agent_key}")
+                    script_restart_agent(agent_key)
 
-                return not state.agent_key is None
+                return 'agent_key' in data
 
-    elif obj.HasField('lldp_neighbor'):
-        # Update the config based on LLDP info, if needed
-        logging.info(f"process LLDP notification : {obj}")
-        my_port = obj.lldp_neighbor.key.interface_name  # ethernet-1/x
-        to_port = obj.lldp_neighbor.data.port_id
-        peer_sys_name = obj.lldp_neighbor.data.system_name
-
-        # TODO process
-
-    elif obj.HasField('bfd_session'):
-        logging.info(f"process BFD notification : {obj}")
-        src_ip_addr = obj.bfd_session.key.src_ip_addr.addr
-        dst_ip_addr = obj.bfd_session.key.dst_ip_addr.addr
-
-        # Integer, 4=UP
-        status = obj.bfd_session.data.status  # data.src_if_id, not always set
-        src_ip_str = ipaddress.ip_address(src_ip_addr).__str__()
-        dst_ip_str = ipaddress.ip_address(dst_ip_addr).__str__()
-        logging.info(f"BFD : src={src_ip_str} dst={dst_ip_str} status={status}")
-
-        # TODO process
     else:
         logging.info(f"Unexpected notification : {obj}")
 
-    # dont subscribe to LLDP now
     return False
 
-##
-# Update agent state flapcounts for BFD
-##
-def Update_BFDFlapcounts(state,peer_ip,status=0):
-    if peer_ip not in state.bfd_flaps:
-       logging.info(f"BFD : initializing flap state for {peer_ip}")
-       state.bfd_flaps[peer_ip] = {}
-    now = datetime.datetime.now()
-    flaps_this_period, history = Update_Flapcounts(state, now, peer_ip, status,
-                                                   state.bfd_flaps,
-                                                   state.flap_period_mins)
-    state_update = {
-      "status" : { "value" : "red" if flaps_this_period > state.flap_threshold or status!=4 else "green" },
-      "flaps_last_period" : flaps_this_period,
-      "flaps_history" : { "value" : history },
-      "last_flap_timestamp" : { "value" : now.strftime("%Y-%m-%d %H:%M:%S") }
-    }
-    Update_Peer_State( peer_ip, 'bfd', state_update )
-    Update_Global_State( state, "total_bfd_flaps_last_period", # Works??
-      sum( [len(f) for f in state.bfd_flaps.values()] ) )
-
-##
-# Update agent state flapcounts for Route entry
-##
-def Update_RouteFlapcounts(state,peer_ip,prefix):
-    if peer_ip not in state.route_flaps:
-       logging.info(f"ROUTE : initializing flap state for {peer_ip}")
-       state.route_flaps[peer_ip] = {}
-    now = datetime.datetime.now()
-    flaps_this_period, history = Update_Flapcounts(state, now, peer_ip, prefix,
-                                                   state.route_flaps,
-                                                   state.flap_period_mins)
-    state_update = {
-      "status" : { "value" : "red" if flaps_this_period > state.flap_threshold else "green" },
-      "flaps_last_period" : flaps_this_period,
-      "flaps_history" : { "value" : history },
-      "last_flap_timestamp" : { "value" : now.strftime("%Y-%m-%d %H:%M:%S") }
-    }
-    Update_Peer_State( peer_ip, 'routes', state_update )
-    # Update_Global_State( state )
-
-##
-# Update agent state flapcounts
-##
-def Update_Flapcounts(state,now,peer_ip,status,flapmap,period_mins):
-    flaps = flapmap[peer_ip]
-    if status != 0:
-       flaps[now] = status
-    keep_flaps = {}
-    keep_history = ""
-    start_of_period = now - datetime.timedelta(minutes=period_mins)
-    _max = state.max_flaps_history
-    for i in sorted(flaps.keys(), reverse=True):
-       logging.info(f"BFD : check if {i} is within the last period {start_of_period}")
-       if ( i > start_of_period and (_max==0 or _max>len(keep_flaps)) ):
-           keep_flaps[i] = flaps[i]
-           keep_history += f'{ i.strftime("[%H:%M:%S.%f]") } ~ {flaps[i]},'
-       else:
-           logging.info(f"flap happened outside monitoring period/max: {i}")
-           break
-    logging.info(f"BFD : keeping last period of flaps for {peer_ip}:{keep_flaps}")
-    flapmap[peer_ip] = keep_flaps
-    return len( keep_flaps ), keep_history
 
 ##################################################################################################
 ## This functions get the app_id from idb for a given app_name
@@ -295,28 +109,136 @@ def get_app_id(app_name):
     logging.info(f'app_id_response {app_id_response.status} {app_id_response.id} ')
     return app_id_response.id
 
-###########################
-# Invokes gnmic client to update router configuration, via bash script
-###########################
-def script_restart_agent(state):
-    logging.info(f'Calling restart script: state={state}' )
+def Gnmi_subscribe_bgp_changes():
+    subscribe = {
+            'subscription': [
+                {
+                    # 'path': '/srl_nokia-network-instance:network-instance[name=*]/protocols/srl_nokia-bgp:bgp/neighbor[peer-address=*]/admin-state',
+                    # Possible to subscribe without '/admin-state', but then too many events
+                    # Like this, no 'delete' is received when the neighbor is deleted
+                    # Also, 'enable' event is followed by 'disable' - broken
+                    # 'path': '/network-instance[name=*]/protocols/bgp/neighbor[peer-address=*]/admin-state',
+                    # This leads to too many events, hitting the max 60/minute gNMI limit
+                    # 10 events per CLI change to a bgp neighbor, many duplicates
+                    # 'path': '/network-instance[name=*]/protocols/bgp/neighbor[peer-address=*]',
+                    'path': '/network-instance[name=*]/protocols/bgp/neighbor[peer-address=*]',
+                    'mode': 'on_change',
+                    # 'heartbeat_interval': 10 * 1000000000 # ns between, i.e. 10s
+                    # Mode 'sample' results in polling
+                    # 'mode': 'sample',
+                    # 'sample_interval': 10 * 1000000000 # ns between samples, i.e. 10s
+                }
+            ],
+            'use_aliases': False,
+            'mode': 'stream',
+            'encoding': 'json'
+        }
+    _bgp = re.compile( r'^network-instance\[name=([^]]*)\]/protocols/bgp/neighbor\[peer-address=([^]]*)\]/admin-state$' )
+
+    # with Namespace('/var/run/netns/srbase-mgmt', 'net'):
+    with gNMIclient(target=('unix:///opt/srlinux/var/run/sr_gnmi_server',57400),
+                            username="admin",password="admin",
+                            insecure=True) as c:
+      telemetry_stream = c.subscribe(subscribe=subscribe)
+      for m in telemetry_stream:
+        try:
+          if m.HasField('update'): # both update and delete events
+              # Filter out only toplevel events
+              parsed = telemetryParser(m)
+              logging.info(f"gNMI change event :: {parsed}")
+              update = parsed['update']
+              if update['update']:
+                 path = update['update'][0]['path']  # Only look at top level
+                 neighbor = _bgp.match( path )
+                 if not neighbor:
+                    logging.info(f"Ignoring gNMI change event :: {path}")
+                    continue
+                 peer_ip = neighbor.groups()[1]
+                 # No-op if already exists
+                 Add_ACL(c,peer_ip)
+              else: # pygnmi does not provide 'path' for delete events
+                 handleDelete(c,m)
+
+        except Exception as e:
+          traceback_str = ''.join(traceback.format_tb(e.__traceback__))
+          logging.error(f'Exception caught in gNMI :: {e} m={m} stack:{traceback_str}')
+    logging.info("Leaving BGP event loop")
+
+def handleDelete(gnmi,m):
+    logging.info(f"handleDelete :: {m}")
+    for e in m.update.delete:
+       for p in e.elem:
+         if p.name == "neighbor":
+           for n,v in p.key.items():
+             # logging.info(f"n={n} v={v}")
+             if n=="peer-address":
+                peer_ip = v
+                Remove_ACL(gnmi,peer_ip)
+                return
+
+def checkIP(ip):
     try:
-       script_proc = subprocess.Popen(['/etc/opt/srlinux/appmgr/netbeez-restart-agent.sh',
-                                       state.agent_key ],
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-       stdoutput, stderroutput = script_proc.communicate()
-       logging.info(f'script_restart_agent result: {stdoutput} err={stderroutput}')
-    except Exception as e:
-       logging.error(f'Exception caught in script_restart_agent :: {e}')
+        return 4 if type(ip_address(ip)) is IPv4Address else 6
+    except ValueError:
+        return None
 
-class State(object):
-    def __init__(self):
-        self.agent_key = None       # Agent key received from NetBeez
+def Add_ACL(gnmi,peer_ip):
+    seq, next_seq = Find_ACL_entry(gnmi,peer_ip) # Also returns next available entry
+    if seq is None:
+        v = checkIP(peer_ip)
+        acl_entry = {
+          "match": {
+            ("protocol" if v==4 else "next-header"): "tcp",
+            "source-ip": { "prefix": peer_ip + '/' + ('32' if v==4 else '128') },
+            "destination-port": { "operator": "eq", "value": 179 }
+          },
+          "action": { "accept": { } }
+        }
+        path = f'/acl/cpm-filter/ipv{v}-filter/entry[sequence-id={next_seq}]'
+        logging.info(f"Update: {path}={acl_entry}")
+        gnmi.set( encoding='json_ietf', update=[(path,acl_entry)] )
 
-        # TODO more properties
+def Remove_ACL(gnmi,peer_ip):
+   seq, next_seq = Find_ACL_entry(gnmi,peer_ip)
+   if seq is not None:
+       logging.info(f"Deleting ACL entry :: {seq}")
+       v = checkIP(peer_ip)
+       path = f'/acl/cpm-filter/ipv{v}-filter/entry[sequence-id={seq}]'
+       gnmi.set( encoding='json_ietf', delete=[path] )
 
-    def __str__(self):
-        return str(self.__class__) + ": " + str(self.__dict__)
+#
+# Because it is possible that ACL entries get saved to 'startup', the agent may
+# not have a full map of sequence number to peer_ip. Therefore, we perform a
+# lookup based on IP address each time
+# Since 'prefix' is not a key, we have to loop through all entries
+#
+def Find_ACL_entry(gnmi,peer_ip):
+
+   # path = '/acl/cpm-filter/ipv4-filter/entry[sequence-id=*]/match/source-ip/prefix'
+   v = checkIP(peer_ip)
+   path = f'/acl/cpm-filter/ipv{v}-filter/entry/match/source-ip/prefix'
+   acl_entries = gnmi.get( encoding='json_ietf', path=[path] )
+   logging.info(f"GOT GET response :: {acl_entries}")
+   searched = peer_ip + '/' + ('32' if v==4 else '128')
+   next_seq = 1000
+   for e in acl_entries['notification']:
+     try:
+      if 'update' in e:
+        logging.info(f"GOT Update :: {e['update']}")
+        for u in e['update']:
+            for j in u['val']['entry']:
+               logging.info(f"GOT ACL entry :: {j}")
+               match = j['match']
+               prefix = match['source-ip']['prefix']
+               if (prefix==searched and 'destination-port' in match
+                   and match['destination-port']['value']==179):
+                   logging.info(f"Found matching entry :: {j}")
+                   return (j['sequence-id'],None) # Could check >= start
+               elif j['sequence-id']==next_seq:
+                   ++next_seq
+     except Exception as e:
+        logging.error(f'Exception caught in Find_ACL_entry :: {e}')
+   return (None,next_seq)
 
 ##################################################################################################
 ## This is the main proc where all processing for auto_config_agent starts.
@@ -327,7 +249,6 @@ class State(object):
 def Run():
     sub_stub = sdk_service_pb2_grpc.SdkNotificationServiceStub(channel)
 
-    # optional agent_liveliness=<seconds> to have system kill unresponsive agents
     response = stub.AgentRegister(request=sdk_service_pb2.AgentRegistrationRequest(), metadata=metadata)
     logging.info(f"Registration response : {response.status}")
 
@@ -348,27 +269,17 @@ def Run():
     stream_request = sdk_service_pb2.NotificationStreamRequest(stream_id=stream_id)
     stream_response = sub_stub.NotificationStream(stream_request, metadata=metadata)
 
-    state = State()
-    count = 1
-    lldp_subscribed = False
-    logging.info("Main loop - waiting for config notifications")
+    # threading.Thread(target=Gnmi_subscribe_bgp_changes).start()
+    # Gnmi_subscribe_bgp_changes()
+    executor = ThreadPoolExecutor(max_workers=1)
+    executor.submit(Gnmi_subscribe_bgp_changes)
+
+    logging.info('Waiting for gNMI events in parallel')
     try:
         for r in stream_response:
-            logging.info(f"Count :: {count}  NOTIFICATION:: \n{r.notification}")
-            count += 1
+            logging.info(f"NOTIFICATION:: \n{r.notification}")
             for obj in r.notification:
-                if obj.HasField('config') and obj.config.key.js_path == ".commit.end":
-                    logging.info('TO DO -commit.end config')
-                else:
-                    if Handle_Notification(obj, state) and not lldp_subscribed:
-                       Subscribe(stream_id, 'lldp')
-                       # Subscribe(stream_id, 'route')
-                       lldp_subscribed = True
-
-                    # Program router_id only when changed
-                    # if state.router_id != old_router_id:
-                    #   gnmic(path='/network-instance[name=default]/protocols/bgp/router-id',value=state.router_id)
-                    logging.info(f'Updated state: {state}')
+                Handle_Notification(obj)
 
     except grpc._channel._Rendezvous as err:
         logging.info(f'GOING TO EXIT NOW: {err}')
@@ -391,7 +302,7 @@ def Run():
 ## When called, will unregister Agent and gracefully exit
 ############################################################
 def Exit_Gracefully(signum, frame):
-    logging.info("Caught signal :: {}\n will unregister fib_agent".format(signum))
+    logging.info("Caught signal :: {}\n will unregister bgp acl agent".format(signum))
     try:
         response=stub.AgentUnRegister(request=sdk_service_pb2.AgentRegistrationRequest(), metadata=metadata)
         logging.error('try: Unregister response:: {}'.format(response))
@@ -400,9 +311,23 @@ def Exit_Gracefully(signum, frame):
         logging.info('GOING TO EXIT NOW: {}'.format(err))
         sys.exit()
 
+###########################
+# Invokes gnmic client to start Netbeez agent, via bash script
+###########################
+def script_restart_agent(agent_key):
+    logging.info(f'Calling restart script: key={agent_key}' )
+    try:
+       script_proc = subprocess.Popen(['/etc/opt/srlinux/appmgr/netbeez-restart-agent.sh',
+                                       agent_key ],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+       stdoutput, stderroutput = script_proc.communicate()
+       logging.info(f'script_restart_agent result: {stdoutput} err={stderroutput}')
+    except Exception as e:
+       logging.error(f'Exception caught in script_restart_agent :: {e}')
+
 ##################################################################################################
 ## Main from where the Agent starts
-## Log file is written to: /var/log/srlinux/stdout/<dutName>_fibagent.log
+## Log file is written to: /var/log/srlinux/stdout/bgp_acl_agent.log
 ## Signals handled for graceful exit: SIGTERM
 ##################################################################################################
 if __name__ == '__main__':
@@ -411,14 +336,14 @@ if __name__ == '__main__':
     signal.signal(signal.SIGTERM, Exit_Gracefully)
     if not os.path.exists(stdout_dir):
         os.makedirs(stdout_dir, exist_ok=True)
-    log_filename = '{}/netbeez-agent.log'.format(stdout_dir)
-    logging.basicConfig(
-      handlers=[RotatingFileHandler(log_filename, maxBytes=3000000,backupCount=5)],
-      format='%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s',
-      datefmt='%H:%M:%S', level=logging.INFO)
-
+    log_filename = f'{stdout_dir}/{agent_name}.log'
+    logging.basicConfig(filename=log_filename, filemode='a',\
+                        format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',\
+                        datefmt='%H:%M:%S', level=logging.INFO)
+    handler = RotatingFileHandler(log_filename, maxBytes=3000000,backupCount=5)
+    logging.getLogger().addHandler(handler)
     logging.info("START TIME :: {}".format(datetime.datetime.now()))
     if Run():
-        logging.info('Agent unregistered and agent routes withdrawed from dut')
+        logging.info('Agent unregistered')
     else:
         logging.info('Should not happen')
